@@ -1,0 +1,94 @@
+x-env: &env
+  DATABASE_URL: postgresql://app:app@db:5432/app
+  WEBHOOK_SECRET: ${WEBHOOK_SECRET:-test-secret}
+  PROVIDER_TIMEOUT: "60"
+  ALPHA_URL: http://alpha:8000
+  BETA_URL: http://beta:8000
+  PUBLIC_URL: http://api:8000
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: .
+    command: python -m app.migrate
+    environment: *env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    environment:
+      <<: *env
+      PROVIDER_TIMEOUT: "60"
+      WATCHDOG_INTERVAL: "1"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  alpha:
+    build: .
+    command: uvicorn fakeprovider.main:app --host 0.0.0.0 --port 8000
+    environment:
+      PROVIDER_NAME: alpha
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-test-secret}
+    ports:
+      - "${ALPHA_PORT:-8001}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  beta:
+    build: .
+    command: uvicorn fakeprovider.main:app --host 0.0.0.0 --port 8000
+    environment:
+      PROVIDER_NAME: beta
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-test-secret}
+    ports:
+      - "${BETA_PORT:-8002}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  tests:
+    build: .
+    profiles: [test]
+    volumes:
+      - .:/srv
+    environment:
+      <<: *env
+      API_URL: http://api:8000
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+      alpha:
+        condition: service_healthy
+      beta:
+        condition: service_healthy
