@@ -109,3 +109,8 @@ async def quiet_fakes():
         async with httpx.AsyncClient(base_url=url, timeout=10) as c:
             assert (await c.post("/_admin/reset")).status_code == 200
         await configure(name, webhook="never")
+    yield
+    # после набора фейки возвращаются к нормальной работе, иначе ручной запуск (demo.sh) ждёт вебхук вечно
+    for url in PROVIDER_URLS.values():
+        async with httpx.AsyncClient(base_url=url, timeout=10) as c:
+            await c.post("/_admin/reset")

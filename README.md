@@ -30,27 +30,22 @@ docker compose up --build
 
 ### Пример: оплата, заказ, статус
 
-Подпись `X-Signature` это HMAC-SHA256 сырого тела запроса, один общий секрет для провайдеров и оплат.
+Одна команда проходит весь сценарий (оплата дважды, заказ, ожидание результата, баланс); нужны запущенный `docker compose up` и `openssl`/`python3` на хосте:
 
 ```bash
-API=http://localhost:8000          # или http://localhost:$API_PORT
-SECRET=test-secret
-sign() { python3 -c 'import hmac,hashlib,sys; print(hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$SECRET" "$1"; }
+./demo.sh
+```
 
-# 1. оплата: 10 токенов пользователю 42 (пользователь создаётся первой оплатой)
+Скрипт сам читает `.env` (порт API и `WEBHOOK_SECRET`). Подпись `X-Signature` это HMAC-SHA256 сырого тела запроса, один общий секрет для провайдеров и оплат. Руками один запрос выглядит так (вставлять **одним блоком**, вместе с первыми тремя строками, иначе `sign` не будет определена):
+
+```bash
+API=http://localhost:8000; SECRET=test-secret
+sign() { printf %s "$1" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}'; }
 BODY='{"payment_id":"pay-1","user_id":42,"tokens":10,"status":"succeeded"}'
 curl -s $API/webhooks/payments -H "X-Signature: $(sign "$BODY")" -H 'Content-Type: application/json' -d "$BODY"
-# {"credited":true}; повтор того же запроса даёт {"credited":false}
-
-# 2. заказ (image-fast стоит 2 токена)
-curl -s $API/generate -H 'Content-Type: application/json' \
-  -d '{"user_id":42,"model_slug":"image-fast","prompt":"cat","ref_images":[]}'
-# {"task_id":"<uuid>"}
-
-# 3. статус и история попыток (фейк отвечает через 2-20 с)
-curl -s $API/tasks/<uuid>
-curl -s $API/users/42/balance
 ```
+
+Ответ `{"credited":true}`, повтор того же запроса даёт `{"credited":false}`. Дальше `POST /generate` (тело `{"user_id":42,"model_slug":"image-fast","prompt":"cat","ref_images":[]}`), затем `GET /tasks/<task_id>` (фейк отвечает через 2-20 с) и `GET /users/42/balance`.
 
 Ответы `/generate`: 202, 400 (неизвестная модель или ни одна нога не принимает столько референсов), 402 (мало токенов), 404 (нет такого пользователя), 422, 429 (уже 3 активные задачи). Остальные ручки: `POST /webhooks/providers/{name}`, `GET /tasks/{id}`, `GET /users/{id}/balance`.
 
